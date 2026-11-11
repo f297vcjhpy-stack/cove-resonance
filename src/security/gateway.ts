@@ -3,7 +3,8 @@ import { request as httpRequest } from "node:http";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { OwnerOAuth, ExpiringStore, opaque, digest } from "./oauth.js";
-import { loginHtml, consentHtml, dashboardHtml } from "./adminHtml.js";
+import { loginHtml, consentHtml, dashboardHtml, expiredConsentHtml } from "./adminHtml.js";
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { QrApi } from "./neteaseLogin.js";
 import type { WorkerHost } from "./workerHost.js";
 
@@ -61,8 +62,8 @@ export function createSecureGateway(options: Options) {
     }
     if (id) {
       const p = oauth.pending.get(id);
-      if (!p) { res.status(400).send("授权请求已过期，请回到 ChatGPT 重新连接。"); return; }
-      html(res, consentHtml(s.csrf, id, p.client.client_name ?? "OAuth client", p.params.redirectUri)); return;
+      if (!p) { res.status(410); html(res, expiredConsentHtml()); return; }
+      html(res, consentHtml(s.csrf, id, p.client.client_name ?? "OAuth client", p.params.redirectUri, Math.max(1, Math.ceil((p.until - now()) / 60_000)))); return;
     }
     const nonce = opaque(); html(res, dashboardHtml(s.csrf, nonce), nonce);
   });
@@ -92,7 +93,12 @@ export function createSecureGateway(options: Options) {
   });
   app.post("/admin/consent", (req, res) => {
     if (!["allow", "deny"].includes(req.body?.decision)) { res.sendStatus(400); return; }
-    res.redirect(303, oauth.consent(requestId(req.body.request), req.body.decision === "allow"));
+    try {
+      res.redirect(303, oauth.consent(requestId(req.body.request), req.body.decision === "allow"));
+    } catch (error) {
+      if (!(error instanceof InvalidGrantError)) throw error;
+      res.status(410); html(res, expiredConsentHtml());
+    }
   });
   app.get("/admin/status", (_req, res) => res.json({ bound: host.bound, storage: "memory-only" }));
   app.post("/admin/qr/start", async (_req, res) => {

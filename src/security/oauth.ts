@@ -7,6 +7,7 @@ import { InvalidClientMetadataError, InvalidGrantError, InvalidScopeError, Inval
 
 export const opaque = () => randomBytes(32).toString("base64url");
 export const digest = (s: string) => createHash("sha256").update(s).digest("hex");
+export const AUTHORIZATION_REQUEST_TTL_MS = 15 * 60_000;
 type Timed = { until: number };
 export class ExpiringStore<T extends Timed> {
   private values = new Map<string, T>();
@@ -70,7 +71,7 @@ export class OwnerOAuth implements OAuthServerProvider {
     // Defense in depth beyond the SDK redirect validation.
     if (!client.redirect_uris.includes(params.redirectUri)) throw new InvalidRequestError("Exact redirect URI required");
     const id = opaque();
-    this.pending.set(id, { client, params, until: this.now() + 5 * 60_000 });
+    this.pending.set(id, { client, params, until: this.now() + AUTHORIZATION_REQUEST_TTL_MS });
     res.redirect(303, "/admin?request=" + id);
   }
   consent(id: string, allow: boolean): string {

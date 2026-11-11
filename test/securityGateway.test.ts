@@ -49,8 +49,8 @@ async function setup() {
     const html = await home.text();
     return { response, cookie, csrf: html.match(/const csrf="([^"]+)"/)![1] };
   }
-  async function register(redirect = callback) {
-    return request("/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "ChatGPT test", redirect_uris: [redirect], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }) });
+  async function register(redirect = callback, authMethod = "none") {
+    return request("/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "ChatGPT test", redirect_uris: [redirect], token_endpoint_auth_method: authMethod, grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }) });
   }
   const form = (path: string, values: Record<string, string>) => request(path, { method: "POST", body: new URLSearchParams(values) });
   async function authorize() {
@@ -122,6 +122,27 @@ test("authorization requires authenticated explicit consent", () => harness(asyn
   const r = await h.request("/admin/consent", { method: "POST", body: new URLSearchParams({ request: id, decision: "allow" }) });
   assert.equal(r.status, 401);
 }));
+test("owner can finish consent after the old five-minute window", () => harness(async h => {
+  const { id } = await h.authorize();
+  h.advance(6 * 60_000);
+  const admin = await h.login();
+  const response = await h.request("/admin/consent", { method: "POST", headers: { cookie: admin.cookie, origin }, body: new URLSearchParams({ csrf: admin.csrf, request: id, decision: "allow" }) });
+  assert.equal(response.status, 303);
+  assert.ok(new URL(response.headers.get("location")!).searchParams.get("code"));
+}));
+test("expired and replayed consent show recovery guidance without issuing another code", () => harness(async h => {
+  const { id } = await h.authorize();
+  h.advance(16 * 60_000);
+  const admin = await h.login();
+  const submit = (request: string) => h.request("/admin/consent", { method: "POST", headers: { cookie: admin.cookie, origin }, body: new URLSearchParams({ csrf: admin.csrf, request, decision: "allow" }) });
+  const expired = await submit(id);
+  assert.equal(expired.status, 410); assert.equal(expired.headers.get("location"), null);
+  assert.match(await expired.text(), /回到 ChatGPT/);
+  const { id: freshId } = await h.authorize();
+  assert.equal((await submit(freshId)).status, 303);
+  const replay = await submit(freshId);
+  assert.equal(replay.status, 410); assert.match(await replay.text(), /已失效/);
+}));
 test("PKCE, client, redirect and resource are bound; authorization codes are single-use", () => harness(async h => {
   const c = await h.consent();
   const common = { client_id: c.client.client_id, grant_type: "authorization_code", code: c.code, code_verifier: verifier, redirect_uri: callback, resource };
@@ -132,6 +153,25 @@ test("PKCE, client, redirect and resource are bound; authorization codes are sin
   assert.equal((await h.form("/token", { ...common, client_id: client2.client_id })).status, 400);
   assert.equal((await h.form("/token", common)).status, 200);
   assert.equal((await h.form("/token", common)).status, 400);
+}));
+test("per-connector ChatGPT callback supports confidential client token exchange", () => harness(async h => {
+  const redirect = "https://chatgpt.com/connector/oauth/fixture-connector";
+  const registration = await h.register(redirect, "client_secret_post");
+  assert.equal(registration.status, 201);
+  const client = await registration.json();
+  const auth = await h.request("/authorize?" + new URLSearchParams({ client_id: client.client_id, redirect_uri: redirect, response_type: "code", code_challenge: challenge, code_challenge_method: "S256", resource, scope: "music", state: "connector-state" }));
+  assert.equal(auth.status, 303);
+  const id = new URL(auth.headers.get("location")!, origin).searchParams.get("request")!;
+  const admin = await h.login();
+  const consent = await h.request("/admin/consent", { method: "POST", headers: { cookie: admin.cookie, origin }, body: new URLSearchParams({ csrf: admin.csrf, request: id, decision: "allow" }) });
+  assert.equal(consent.status, 303);
+  const target = new URL(consent.headers.get("location")!);
+  assert.equal(target.pathname, "/connector/oauth/fixture-connector");
+  assert.equal(target.searchParams.get("state"), "connector-state");
+  const response = await h.form("/token", { client_id: client.client_id, client_secret: client.client_secret, grant_type: "authorization_code", code: target.searchParams.get("code")!, code_verifier: verifier, redirect_uri: redirect, resource });
+  assert.equal(response.status, 200);
+  const tokens = await response.json();
+  assert.equal((await h.request("/mcp/music", { headers: { authorization: "Bearer " + tokens.access_token } })).status, 200);
 }));
 test("access tokens expire; refresh tokens rotate and replay revokes the family", () => harness(async h => {
   const { client, tokens } = await h.grant();
