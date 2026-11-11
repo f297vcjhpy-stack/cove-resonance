@@ -253,3 +253,15 @@ test("diagnostics omit query secrets and rate limits ignore spoofed forwarding h
   const second = await h.request("/authorize?client_id=other", { headers: { "x-forwarded-for": "192.0.2.2" } });
   assert.equal(Number(second.headers.get("ratelimit-remaining")), Number(r.headers.get("ratelimit-remaining")) - 1);
 }));
+
+
+test("consent CSP permits its validated callback origin while login remains self-only", () => harness(async h => {
+  const { id } = await h.authorize(), admin = await h.login();
+  const login = await h.request("/admin");
+  assert.match(login.headers.get("content-security-policy")!, /form-action 'self';/);
+  const consent = await h.request("/admin?request=" + id, { headers: { cookie: admin.cookie } });
+  const policy = consent.headers.get("content-security-policy")!;
+  assert.match(policy, /form-action 'self' https:\/\/chatgpt\.com;/);
+  assert.doesNotMatch(policy, /form-action[^;]*\*/);
+  assert.doesNotMatch(policy, /form-action[^;]*chat\.openai\.com/);
+}));

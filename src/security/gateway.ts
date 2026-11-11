@@ -61,8 +61,8 @@ export function createSecureGateway(options: Options) {
   const session = (req: Request) => sessions.get(digest(cookie(req, sessionCookie)));
   const csrf = (req: Request, s: Session) => req.headers.origin === options.origin && same(String(req.headers["x-cove-csrf"] ?? req.body?.csrf ?? ""), s.csrf);
   const issueCookie = (res: Response, name: string, value: string, maxAge: number) => res.setHeader("Set-Cookie", `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`);
-  const html = (res: Response, content: string, nonce?: string) => {
-    res.setHeader("Content-Security-Policy", `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src ${nonce ? `'nonce-${nonce}'` : "'none'"}; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
+  const html = (res: Response, content: string, nonce?: string, consentRedirectOrigin?: string) => {
+    res.setHeader("Content-Security-Policy", `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src ${nonce ? `'nonce-${nonce}'` : "'none'"}; connect-src 'self'; form-action 'self'${consentRedirectOrigin ? ' ' + consentRedirectOrigin : ''}; base-uri 'none'; frame-ancestors 'none'`);
     res.type("html").send(content);
   };
   app.get("/admin", (req, res) => {
@@ -74,7 +74,7 @@ export function createSecureGateway(options: Options) {
     if (id) {
       const p = oauth.pending.get(id);
       if (!p) { res.status(410); html(res, expiredConsentHtml()); return; }
-      html(res, consentHtml(s.csrf, id, p.client.client_name ?? "OAuth client", p.params.redirectUri, Math.max(1, Math.ceil((p.until - now()) / 60_000)))); return;
+      html(res, consentHtml(s.csrf, id, p.client.client_name ?? "OAuth client", p.params.redirectUri, Math.max(1, Math.ceil((p.until - now()) / 60_000))), undefined, new URL(p.params.redirectUri).origin); return;
     }
     const nonce = opaque(); html(res, dashboardHtml(s.csrf, nonce), nonce);
   });
