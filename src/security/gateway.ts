@@ -9,7 +9,8 @@ import type { QrApi } from "./neteaseLogin.js";
 import type { WorkerHost } from "./workerHost.js";
 
 type Session = { until: number; csrf: string; qr?: { key: string; until: number; lastPoll: number }; busy?: boolean };
-type Options = { origin: string; adminSecret: string; host: WorkerHost; qr: QrApi; redirectOrigins?: Set<string>; now?: () => number };
+type RequestSummary = { endpoint: string; method: string; status: number; elapsedMs: number };
+type Options = { observe?: (summary: RequestSummary) => void; origin: string; adminSecret: string; host: WorkerHost; qr: QrApi; redirectOrigins?: Set<string>; now?: () => number };
 const sessionCookie = "__Host-cove_session";
 const loginCookie = "__Host-cove_login";
 const same = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -29,7 +30,17 @@ export function createSecureGateway(options: Options) {
   const sessions = new ExpiringStore<Session>(now, 20), logins = new ExpiringStore<{ until: number }>(now, 50);
   const app = express();
   app.disable("x-powered-by");
-  // No proxy trust: do not use caller-supplied X-Forwarded-For to bypass limits.
+  // Global endpoint limits deliberately ignore untrusted forwarding headers.
+  const rateLimit = { keyGenerator: () => "cove-global" };
+  const diagnosticPaths = new Set(["/register", "/authorize", "/token", "/revoke", "/admin", "/admin/login", "/admin/consent", "/mcp/music", "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource/mcp/music"]);
+  app.use((req, res, next) => {
+    if (options.observe && diagnosticPaths.has(req.path)) {
+      const endpoint = req.path, started = Date.now();
+      const method = ["GET", "POST", "OPTIONS", "DELETE", "HEAD"].includes(req.method) ? req.method : "OTHER";
+      res.once("finish", () => options.observe!({ endpoint, method, status: res.statusCode, elapsedMs: Date.now() - started }));
+    }
+    next();
+  });
   app.use((req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     // no-referrer can turn a browser form POST's Origin into "null". Keep the
@@ -44,7 +55,7 @@ export function createSecureGateway(options: Options) {
   app.get("/", (_req, res) => res.json({ ok: true, service: "cove-secure-gateway" }));
   // Bound all OAuth bodies before entering SDK middleware.
   app.use(["/register", "/token", "/revoke", "/authorize"], express.json({ limit: "16kb" }), express.urlencoded({ extended: false, limit: "16kb" }));
-  app.use(mcpAuthRouter({ provider: oauth, issuerUrl: new URL(options.origin), resourceServerUrl: oauth.resource, scopesSupported: ["music"], resourceName: "Cove Resonance Music" }));
+  app.use(mcpAuthRouter({ provider: oauth, issuerUrl: new URL(options.origin), resourceServerUrl: oauth.resource, scopesSupported: ["music"], resourceName: "Cove Resonance Music", clientRegistrationOptions: { rateLimit }, authorizationOptions: { rateLimit }, tokenOptions: { rateLimit }, revocationOptions: { rateLimit } }));
   app.get("/.well-known/oauth-protected-resource", (_req, res) => res.json({ resource: oauth.resource.href, authorization_servers: [options.origin + "/"], scopes_supported: ["music"] }));
   app.use("/admin", express.urlencoded({ extended: false, limit: "8kb" }), express.json({ limit: "8kb" }));
   const session = (req: Request) => sessions.get(digest(cookie(req, sessionCookie)));

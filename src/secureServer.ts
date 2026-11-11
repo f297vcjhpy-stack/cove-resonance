@@ -14,7 +14,7 @@ const host = new PrivateWorker(workerPort, origin);
 // Allow first deployment and public 401/metadata checks before the owner enters
 // a secret in Render. A random, undisclosed fallback plus a closed admin gate
 // makes this state unclaimable by public visitors.
-const { app } = createSecureGateway({ origin, adminSecret: adminSecret || randomBytes(32).toString("base64url"), host, qr: new NeteaseQrApi() });
+const { app } = createSecureGateway({ origin, adminSecret: adminSecret || randomBytes(32).toString("base64url"), host, qr: new NeteaseQrApi(), observe: summary => console.log(JSON.stringify({ event: "gateway_request", ...summary })) });
 const publicApp = express();
 publicApp.disable("x-powered-by");
 if (!adminSecret) publicApp.use("/admin", (_req, res) => {

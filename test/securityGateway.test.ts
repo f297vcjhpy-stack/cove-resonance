@@ -20,6 +20,7 @@ async function harness(run: (h: Awaited<ReturnType<typeof setup>>) => Promise<vo
   try { await run(h); } finally { await h.close(); }
 }
 async function setup() {
+  const observations: unknown[] = [];
   let time = Date.now(), providerCookie = "", qrCount = 0;
   let qrResult: () => Promise<{ code: number; cookie?: string }> = async () => ({ code: 803, cookie: "MUSIC_U=test-provider-cookie-not-a-real-account" });
   const backend = createServer((req, res) => {
@@ -33,7 +34,7 @@ async function setup() {
     async replace(value) { providerCookie = value; }, async close() {},
   };
   const qr: QrApi = { async start() { qrCount++; return { key: "private-qr-key", image: "data:image/png;base64,aGVsbG8=" }; }, async check() { return qrResult(); } };
-  const { app } = createSecureGateway({ origin, adminSecret: secret, host, qr, now: () => time });
+  const { app } = createSecureGateway({ origin, adminSecret: secret, host, qr, now: () => time, observe: s => observations.push(s) });
   const server = createServer(app);
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const base = "http://127.0.0.1:" + (server.address() as any).port;
@@ -76,7 +77,7 @@ async function setup() {
     return { ...c, tokens: await response.json() };
   }
   const adminPost = (path: string, admin: { cookie: string; csrf: string }, extraHeaders: Record<string, string> = {}) => request("/admin/" + path, { method: "POST", headers: { cookie: admin.cookie, origin, "x-cove-csrf": admin.csrf, "content-type": "application/json", ...extraHeaders }, body: "{}" });
-  return { request, login, register, form, authorize, consent, grant, adminPost, host,
+  return { request, login, register, form, authorize, consent, grant, adminPost, host, observations,
     get qrCount() { return qrCount; },
     set qrResult(fn: typeof qrResult) { qrResult = fn; },
     advance(ms: number) { time += ms; },
@@ -241,3 +242,14 @@ test("registered confidential client completes OAuth and MCP after gateway resta
     assert.equal((await second.request("/mcp/music", { method: "POST", headers: { authorization: "Bearer " + tokens.access_token, "content-type": "application/json" }, body: "{}" })).status, 200);
   } finally { await second.close(); }
 });
+
+
+test("diagnostics omit query secrets and rate limits ignore spoofed forwarding headers", () => harness(async h => {
+  const r = await h.request("/authorize?client_id=sensitive-fixture&secret=never-log-this", { headers: { "x-forwarded-for": "192.0.2.1" } });
+  assert.equal(r.status, 400);
+  await new Promise(r => setImmediate(r));
+  const log = JSON.stringify(h.observations);
+  assert.match(log, /authorize/); assert.doesNotMatch(log, /sensitive-fixture|never-log-this|192.0.2.1/);
+  const second = await h.request("/authorize?client_id=other", { headers: { "x-forwarded-for": "192.0.2.2" } });
+  assert.equal(Number(second.headers.get("ratelimit-remaining")), Number(r.headers.get("ratelimit-remaining")) - 1);
+}));
