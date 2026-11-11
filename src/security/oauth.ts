@@ -1,9 +1,10 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { RegisteredClients } from "./registeredClients.js";
 import type { Response } from "express";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { InvalidClientMetadataError, InvalidGrantError, InvalidScopeError, InvalidTargetError, InvalidTokenError, InvalidRequestError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InvalidGrantError, InvalidScopeError, InvalidTargetError, InvalidTokenError, InvalidRequestError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 export const opaque = () => randomBytes(32).toString("base64url");
 export const digest = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -25,40 +26,26 @@ export class ExpiringStore<T extends Timed> {
   delete(key: string): void { this.values.delete(key); }
   clear(): void { this.values.clear(); }
 }
-type Client = OAuthClientInformationFull & Timed;
 export type Pending = Timed & { client: OAuthClientInformationFull; params: AuthorizationParams };
 type Code = Pending;
 type Grant = Timed & { clientId: string; family: string };
 
 /** Single-owner OAuth provider. The SDK handles parsing, DCR, PKCE and client authentication. */
 export class OwnerOAuth implements OAuthServerProvider {
-  private clients: ExpiringStore<Client>;
+  readonly clientsStore: RegisteredClients;
   readonly pending: ExpiringStore<Pending>;
   private codes: ExpiringStore<Code>;
   private access: ExpiringStore<Grant>;
   private refresh: ExpiringStore<Grant>;
   private spentRefresh: ExpiringStore<Grant>;
   private families: ExpiringStore<Timed>;
-  constructor(readonly resource: URL, private redirectOrigins: Set<string>, private now = Date.now) {
-    this.clients = new ExpiringStore(now); this.pending = new ExpiringStore(now);
+  constructor(readonly resource: URL, redirectOrigins: Set<string>, registrationSecret: string, private now = Date.now) {
+    this.clientsStore = new RegisteredClients(registrationSecret, resource, redirectOrigins, now);
+    this.pending = new ExpiringStore(now);
     this.codes = new ExpiringStore(now); this.access = new ExpiringStore(now, 500);
     this.refresh = new ExpiringStore(now, 500); this.families = new ExpiringStore(now);
     this.spentRefresh = new ExpiringStore(now, 4096);
   }
-  readonly clientsStore = {
-    getClient: async (id: string) => this.clients.get(id),
-    registerClient: async (input: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">): Promise<OAuthClientInformationFull> => {
-      if (!input.redirect_uris.length || input.redirect_uris.length > 5) throw new InvalidClientMetadataError("Invalid redirect URIs");
-      for (const uri of input.redirect_uris) {
-        const u = new URL(uri);
-        if (!this.redirectOrigins.has(u.origin) || u.username || u.password || u.hash) throw new InvalidClientMetadataError("Redirect origin is not allowed");
-      }
-      if (input.token_endpoint_auth_method && !["none", "client_secret_post"].includes(input.token_endpoint_auth_method)) throw new InvalidClientMetadataError("Unsupported client authentication");
-      const client = { ...input, client_id: randomUUID(), client_id_issued_at: Math.floor(this.now() / 1000) };
-      this.clients.set(client.client_id, { ...client, until: this.now() + 7 * 86400_000 });
-      return client;
-    },
-  };
   private target(resource?: URL): void {
     if (resource && resource.href !== this.resource.href) throw new InvalidTargetError("Wrong resource");
   }

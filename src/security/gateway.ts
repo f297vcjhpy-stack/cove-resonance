@@ -25,7 +25,7 @@ export function createSecureGateway(options: Options) {
   const parsed = new URL(options.origin);
   if (parsed.origin !== options.origin || (parsed.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(parsed.hostname))) throw new Error("A canonical HTTPS origin is required");
   if (options.adminSecret.length < 32 || options.adminSecret.length > 512) throw new Error("Set COVE_ADMIN_SECRET to a private random value of at least 32 characters");
-  const oauth = new OwnerOAuth(new URL("/mcp/music", options.origin), options.redirectOrigins ?? new Set(["https://chatgpt.com", "https://chat.openai.com"]), now);
+  const oauth = new OwnerOAuth(new URL("/mcp/music", options.origin), options.redirectOrigins ?? new Set(["https://chatgpt.com", "https://chat.openai.com"]), options.adminSecret, now);
   const sessions = new ExpiringStore<Session>(now, 20), logins = new ExpiringStore<{ until: number }>(now, 50);
   const app = express();
   app.disable("x-powered-by");

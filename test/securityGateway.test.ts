@@ -221,3 +221,23 @@ test("management UI script parses and never exposes a raw-cookie input", () => {
   const js = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1];
   assert.doesNotThrow(() => new vm.Script(js)); assert.doesNotMatch(html, /name="(?:cookie|NETEASE_COOKIE)"/);
 });
+
+test("registered confidential client completes OAuth and MCP after gateway restart", async () => {
+  const first = await setup();
+  const client = await (await first.register(callback, "client_secret_post")).json();
+  await first.close();
+  const second = await setup();
+  try {
+    const response = await second.request("/authorize?" + new URLSearchParams({ client_id: client.client_id, redirect_uri: callback, response_type: "code", code_challenge: challenge, code_challenge_method: "S256", scope: "music", resource }));
+    assert.equal(response.status, 303);
+    const id = new URL(response.headers.get("location")!, origin).searchParams.get("request")!;
+    const admin = await second.login();
+    const consent = await second.request("/admin/consent", { method: "POST", headers: { cookie: admin.cookie, origin }, body: new URLSearchParams({ csrf: admin.csrf, request: id, decision: "allow" }) });
+    assert.equal(consent.status, 303);
+    const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
+    const token = await second.form("/token", { client_id: client.client_id, client_secret: client.client_secret, grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: callback, resource });
+    assert.equal(token.status, 200);
+    const tokens = await token.json();
+    assert.equal((await second.request("/mcp/music", { method: "POST", headers: { authorization: "Bearer " + tokens.access_token, "content-type": "application/json" }, body: "{}" })).status, 200);
+  } finally { await second.close(); }
+});
