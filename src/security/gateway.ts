@@ -31,7 +31,9 @@ export function createSecureGateway(options: Options) {
   // No proxy trust: do not use caller-supplied X-Forwarded-For to bypass limits.
   app.use((req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Referrer-Policy", "no-referrer");
+    // no-referrer can turn a browser form POST's Origin into "null". Keep the
+    // same-origin form identity required by CSRF checks without cross-site leaks.
+    res.setHeader("Referrer-Policy", "same-origin");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Strict-Transport-Security", "max-age=31536000");
@@ -69,7 +71,13 @@ export function createSecureGateway(options: Options) {
     if (now() - attemptWindow > 15 * 60_000) { attempts = 0; attemptWindow = now(); }
     if (++attempts > 20) { res.sendStatus(429); return; }
     const token = cookie(req, loginCookie);
-    if (req.headers.origin !== options.origin || !logins.get(digest(token)) || !same(String(req.body?.csrf ?? ""), token)) { res.sendStatus(403); return; }
+    if (req.headers.origin !== options.origin || !logins.get(digest(token)) || !same(String(req.body?.csrf ?? ""), token)) {
+      const id = requestId(req.body?.request);
+      const retry = id ? "/admin?request=" + id : "/admin";
+      res.status(403);
+      html(res, `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>请重新打开登录页</title><h1>本次登录校验未通过</h1><p>登录页可能已过期、在其他标签页被刷新，或浏览器没有保留当前会话。</p><p><a href="${retry}">重新打开登录页</a>，再输入你自己的管理密钥。若内置浏览器反复出现此提示，请在 Safari 中打开同一个登录链接。</p><p>不要把密钥发到聊天中。</p></html>`);
+      return;
+    }
     logins.delete(digest(token));
     if (typeof req.body?.secret !== "string" || req.body.secret.length > 512 || !same(req.body.secret, options.adminSecret)) { res.status(401).send("管理密钥不正确，请刷新页面重试。"); return; }
     const sid = opaque(); sessions.set(digest(sid), { until: now() + 15 * 60_000, csrf: opaque() });

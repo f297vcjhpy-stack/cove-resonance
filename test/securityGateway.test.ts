@@ -105,6 +105,18 @@ test("admin secret is required; cookies are Secure HttpOnly and login is CSRF pr
   assert.equal((await h.adminPost("qr/start", admin, { origin: "https://evil.test" })).status, 403);
   assert.equal(h.qrCount, 0);
 }));
+test("browser forms retain same-origin identity while null Origin remains rejected", () => harness(async h => {
+  const page = await h.request("/admin");
+  assert.equal(page.headers.get("referrer-policy"), "same-origin");
+  const text = await page.text();
+  const csrf = text.match(/name="csrf" value="([^"]+)"/)![1];
+  const response = await h.request("/admin/login", { method: "POST", headers: { cookie: sessionCookie(page), origin: "null" }, body: new URLSearchParams({ secret, csrf }) });
+  assert.equal(response.status, 403);
+  assert.match(await response.text(), /重新打开登录页/);
+  const admin = await h.login();
+  assert.equal(admin.response.status, 303);
+  assert.equal((await h.request("/admin", { headers: { cookie: admin.cookie } })).headers.get("referrer-policy"), "same-origin");
+}));
 test("authorization requires authenticated explicit consent", () => harness(async h => {
   const { id } = await h.authorize();
   const r = await h.request("/admin/consent", { method: "POST", body: new URLSearchParams({ request: id, decision: "allow" }) });
