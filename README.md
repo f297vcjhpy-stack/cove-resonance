@@ -75,6 +75,10 @@ Listener / Long-wait 的技术细节：
 
 ## 部署
 
+本派生补丁的个人安全部署入口见 **[安全部署说明](docs/SECURE_DEPLOY.zh-CN.md)**。
+需要 OAuth 和受保护扫码登录时，使用 `Dockerfile.secure` 或 `npm run start:secure`；
+下方原版教程与 `npm start` 不包含新增安全网关。
+
 V2 有两种正式监听方式，**二选一，不要同时开启**：
 
 - **Widget Listener**：手机端可用；网页端实测会出现人工确认；桌面端当前不可用；

@@ -163,7 +163,7 @@ export function createHttpServer() {
 }
 
 if (process.env.NODE_ENV !== "test") {
-  createHttpServer().listen(PORT, "0.0.0.0", () => {
+  createHttpServer().listen(PORT, process.env.BRIDGE_HOST ?? "0.0.0.0", () => {
     console.log("Cove Resonance listening on http://0.0.0.0:" + PORT + " (MCP: /mcp, /mcp/music)");
     togetherWorker.start();
   });
